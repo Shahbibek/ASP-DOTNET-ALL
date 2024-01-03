@@ -1,0 +1,273 @@
+using Microsoft.AspNetCore.Mvc;
+using System.Diagnostics;
+using UltimateGuide.Models;
+using UltimateGuide.Entity;
+using UltimateGuide.Data;
+using System.Threading.Tasks;
+using System.Data;
+using OfficeOpenXml.Style;
+using OfficeOpenXml;
+
+namespace UltimateGuide.Controllers
+{
+    public class HomeController : Controller
+    {
+        private readonly ILogger<HomeController> _logger;
+        public readonly IAuthenticationDataAccess _authenticationDataAccess;
+        private AuthenticationDataAccess dataAccess;
+
+
+        public HomeController(ILogger<HomeController> logger, IAuthenticationDataAccess authenticationDataAccess)
+        {
+            _logger = logger;
+            _authenticationDataAccess = authenticationDataAccess;
+        }
+
+        public IActionResult Index()
+        {
+
+            return View();
+        }
+
+        public IActionResult Privacy()
+        {
+            return View();
+        }
+
+        public async Task<IActionResult> GetData()
+        {
+            
+            // DataAccess.GetUserDetails();  -- get all users details           
+            // List<UserEntity> userEntity = await _authenticationDataAccess.GetUserDetails();
+            DataSet dataSet = new DataSet();
+
+            dataSet = await _authenticationDataAccess.GetReport();
+            string folderPath = "D:\\new_file";
+            string resultMessage = WriteDataSetToExcel(dataSet, folderPath);
+
+
+            // Map UserEntity to UserMst model
+            // List<UserMst> userModels = userEntity.Select(userEntity => new UserMst(userEntity)).ToList();
+
+            //return View(userModels);
+            return View();
+        }
+
+        [ResponseCache(Duration = 0, Location = ResponseCacheLocation.None, NoStore = true)]
+        public IActionResult Error()
+        {
+            return View(new ErrorViewModel { RequestId = Activity.Current?.Id ?? HttpContext.TraceIdentifier });
+        }
+
+        public string WriteDataSetToExcel(DataSet dataSet, string folderPath)
+        {
+            try
+            {
+                foreach (DataTable dataTable in dataSet.Tables)
+                {
+                    // filename with table name
+                    string fileName = dataTable.TableName + ".xlsx";
+                    string filePath = Path.Combine(folderPath, fileName);
+
+                    ExcelPackage.LicenseContext = LicenseContext.NonCommercial;
+
+                    using (var package = new ExcelPackage())
+                    {
+                        var worksheet = package.Workbook.Worksheets.Add(dataTable.TableName);
+
+                        // Add headers with styles
+                        for (int col = 1; col <= dataTable.Columns.Count; col++)
+                        {
+                            var headerCell = worksheet.Cells[1, col];
+                            headerCell.Value = dataTable.Columns[col - 1].ColumnName;
+                            headerCell.Style.Font.Bold = true;
+                            headerCell.Style.Border.BorderAround(ExcelBorderStyle.Thin);
+                            headerCell.Style.Fill.PatternType = ExcelFillStyle.Solid;
+                            headerCell.Style.Fill.BackgroundColor.SetColor(System.Drawing.Color.LightGray);
+                        }
+
+                        // Add data to the worksheet
+                        for (int row = 0; row < dataTable.Rows.Count; row++)
+                        {
+                            for (int col = 0; col < dataTable.Columns.Count; col++)
+                            {
+                                var dataCell = worksheet.Cells[row + 2, col + 1];
+                                dataCell.Value = dataTable.Rows[row][col];
+                                dataCell.Style.Border.BorderAround(ExcelBorderStyle.Thin);
+                            }
+                        }
+
+                        // auto filter 
+                        worksheet.Cells[worksheet.Dimension.Address].AutoFilter = true;
+
+                        // Save the Excel file
+                        FileInfo excelFile = new FileInfo(filePath);
+                        package.SaveAs(excelFile);
+
+                        Console.WriteLine($"Excel file created successfully at: {filePath}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+
+                ex.Message.ToString();
+            }
+
+            return "All Excel files created successfully.";
+        }
+    }
+}
+
+----------------------------------------------------------------------------------------------------------------------------------------
+
+using Microsoft.AspNetCore.Http.HttpResults;
+using NuGet.Protocol.Plugins;
+using System;
+using System.Data;
+using System.Data.Common;
+using System.Data.SqlClient;
+using System.Xml.Linq;
+using UltimateGuide.Entity;
+using UltimateGuide.Models;
+
+namespace UltimateGuide.Data
+{
+    public class AuthenticationDataAccess: IAuthenticationDataAccess
+    {
+        private readonly IConfiguration _configuration;
+        private readonly SqlConnection _SqlConnection;
+
+        public AuthenticationDataAccess(IConfiguration configuration)
+        {
+            _configuration = configuration;
+            _SqlConnection = new SqlConnection(_configuration["ConnectionStrings:ConnectionStrings"]);
+        }
+
+        #region start get user details
+        public async Task<List<UserEntity>> GetUserDetails()
+        {
+            List<UserEntity> userList = new List<UserEntity>();
+            try
+            {
+                if (_SqlConnection.State != System.Data.ConnectionState.Open)
+                {
+                    await _SqlConnection.OpenAsync();
+                }
+                string SqlQuery = @"SELECT * FROM TBLUSERMST";
+                using (SqlCommand sqlCommand = new SqlCommand(SqlQuery, _SqlConnection))
+                {
+                    sqlCommand.CommandType = System.Data.CommandType.Text;
+                    sqlCommand.CommandTimeout = 180;
+                    using (DbDataReader dataReader = await sqlCommand.ExecuteReaderAsync())
+                    {
+                        if (dataReader.HasRows)
+                        {                           
+                            while (await dataReader.ReadAsync())
+                            {
+                                UserEntity userEntity = new UserEntity();
+
+                                userEntity.ID = (Guid)(dataReader["ID"]);
+                                userEntity.UserID = Convert.ToInt16(dataReader["USERID"]);
+                                userEntity.RoleID = Convert.ToInt16(dataReader["ROLEID"]);
+                                userEntity.CanAccess = Convert.ToString(dataReader["CANACCESS"]);
+                                userEntity.CanView    = Convert.ToString(dataReader["CANVIEW"]);
+                                userEntity.Name       = Convert.ToString(dataReader["NAME"]);
+                                userEntity.Enrollment = Convert.ToString(dataReader["ENROLLMENT"]);
+                                userEntity.Barcode    = Convert.ToString(dataReader["BARCODE"]);
+                                userEntity.Address    = Convert.ToString(dataReader["ADDRESS"]);
+                                userEntity.Address1   = Convert.ToString(dataReader["ADDRESS1"]);
+                                userEntity.Email      = Convert.ToString(dataReader["EMAIL"]);
+                                userEntity.Email1     = Convert.ToString(dataReader["EMAIL1"]);
+                                userEntity.City       = Convert.ToString(dataReader["CITY"]);
+                                userEntity.State      = Convert.ToString(dataReader["STATE"]);
+                                userEntity.Country    = Convert.ToString(dataReader["COUNTRY"]);
+                                userEntity.CreatedAt  = Convert.ToString(dataReader["CREATEDAT"]);
+                                userEntity.CreatedBy  = Convert.ToString(dataReader["CREATEDBY"]);
+                                userEntity.ModifiedBy = Convert.ToString(dataReader["MODIFIEDBY"]);
+                                userEntity.ModifiedOn = Convert.ToString(dataReader["MODIFIEDON"]);
+                                userList.Add(userEntity);
+                            }
+                        }
+                    }
+                }                
+
+            }
+            catch (Exception ex)
+            {
+                ex.Message.ToString();
+            }
+            finally
+            {
+                await _SqlConnection.CloseAsync();
+                await _SqlConnection.DisposeAsync();
+            }
+            
+            return userList;
+        }
+        #endregion
+
+        #region get excel report test
+        public async Task<DataSet> GetReport()
+        {
+            DataSet dataSet = new DataSet();
+            try
+            {
+                if (_SqlConnection.State != System.Data.ConnectionState.Open)
+
+                {
+                    await _SqlConnection.OpenAsync();
+                }
+
+                using (SqlCommand command = new SqlCommand("usp_GetUserMst", _SqlConnection))
+                {
+                    command.CommandType = CommandType.StoredProcedure;
+                    // retrieve the data
+                    using (SqlDataAdapter adapter = new SqlDataAdapter(command))
+                    {
+                        adapter.Fill(dataSet);
+                    }
+                    DataTable dataTable1 = dataSet.Tables[0];
+                    dataTable1.TableName = "first";
+
+                    DataTable dataTable2 = dataSet.Tables[1];
+                    dataTable2.TableName = "second";
+
+
+                }               
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message); // Log or handle the exception appropriately
+            }
+            finally
+            {
+                await _SqlConnection.CloseAsync();
+                await _SqlConnection.DisposeAsync();
+            }
+
+            return dataSet;
+          
+        }
+
+        #endregion 
+    }
+}
+
+_____________________________________________________________________________________________________________________________________________________________
+
+using System.Data;
+using UltimateGuide.Entity;
+using System.Xml.Linq;
+
+namespace UltimateGuide.Data
+{
+    public interface IAuthenticationDataAccess
+    {
+        public Task<List<UserEntity>> GetUserDetails();
+        Task<DataSet> GetReport();
+
+    }
+}
+
+
