@@ -267,7 +267,57 @@ namespace UltimateGuide.Data
         public Task<List<UserEntity>> GetUserDetails();
         Task<DataSet> GetReport();
 
-    }
-}
+________________________________________________________________________________________________________________________________________________________________
+public static (bool isValid, string errorMessage) ValidateAndProcess(Param parameter)
+        {
+            bool isValid = true;
+            List<string> errorMessages = new List<string>();
+           
+            if (parameter.Id <= 0)
+            {
+                isValid = false;
+                errorMessages.Add("Id must be greater than zero.");
+            }
+            if (string.IsNullOrEmpty(parameter.FromDate) || string.IsNullOrEmpty(parameter.ToDate))
+            {
+                isValid = false;
+                errorMessages.Add("FromDate and ToDate cannot be null or empty.");
+            }
+            else if (!TryParseDate(parameter.FromDate, out var fromDate) || !TryParseDate(parameter.ToDate, out var toDate))
+            {
+                isValid = false;
+                errorMessages.Add("Invalid date format for FromDate or ToDate. Use the format: {01-JAN-2024}");
+            }
+            else if (fromDate > toDate || toDate > DateTime.Today)
+            {
+                isValid = false;
+                errorMessages.Add("Invalid date range.");
+            }            
+            if (string.IsNullOrEmpty(parameter.CompanyCode))
+            {
+                isValid = false;
+                errorMessages.Add("CompanyCode cannot be null or empty.");
+            }
+            
+            return (isValid, string.Join(Environment.NewLine, errorMessages));
+        }
+
+        public static bool TryParseDate(string dateString, out DateTime result)
+        {
+            return DateTime.TryParseExact(dateString, "dd-MMM-yyyy", CultureInfo.InvariantCulture, DateTimeStyles.None, out result);
+        }
+
+    _____________________________________________________________________________________________________________________________________________________
+
+var validationResult = ValidateAndProcess(parameter);
+
+            if (!validationResult.isValid)
+            {
+                return (validationResult.errorMessage);
+            }
+            else
+            {
+                return ("Success");
+            }        
 
 
