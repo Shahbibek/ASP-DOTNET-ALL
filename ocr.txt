@@ -1,0 +1,106 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.IO.Compression;
+using System.Linq;
+using System.Net.Http;
+using System.Text;
+using System.Threading.Tasks;
+
+class Program
+{
+    static void Main(string[] args)
+    {
+        string filePath = "path_to_uploaded_file";
+
+        ProcessFiles(filePath);
+    }
+
+    static void ProcessFiles(string filePath)
+    {
+        if (Path.GetExtension(filePath).Equals(".zip", StringComparison.OrdinalIgnoreCase))
+        {
+            string extractPath = Path.Combine(Path.GetDirectoryName(filePath), Path.GetFileNameWithoutExtension(filePath));
+            ZipFile.ExtractToDirectory(filePath, extractPath);
+            
+            Parallel.ForEach(Directory.GetFiles(extractPath, "*.pdf"), pdfFilePath =>
+            {
+                byte[] fileBytes = File.ReadAllBytes(pdfFilePath);
+                string fileName = Path.GetFileName(pdfFilePath);
+                List<string> statusList;
+                CallAPI(fileBytes, out statusList).Wait();
+                if (statusList.Count > 0)
+                {
+                    foreach (var status in statusList)
+                    {
+                        GetStatus(status).Wait();
+                    }
+                }
+            });
+            
+            Directory.Delete(extractPath, true);
+        }
+        else if (Path.GetExtension(filePath).Equals(".pdf", StringComparison.OrdinalIgnoreCase))
+        {
+            byte[] fileBytes = File.ReadAllBytes(filePath);
+            string fileName = Path.GetFileName(filePath);
+            List<string> statusList;
+            CallAPI(fileBytes, out statusList).Wait();
+            if (statusList.Count > 0)
+            {
+                foreach (var status in statusList)
+                {
+                    GetStatus(status).Wait();
+                }
+            }
+        }
+        else
+        {
+            Console.WriteLine("Unsupported file format. Please upload a PDF or a ZIP file containing PDFs.");
+        }
+    }
+
+    static async Task CallAPI(byte[] fileBytes, out List<string> statusList)
+    {
+        statusList = new List<string>();
+
+        using (HttpClient client = new HttpClient())
+        {
+            // Assuming the API endpoint is "your_api_endpoint"
+            string apiEndpoint = "your_api_endpoint";
+
+            // Convert file bytes to Base64 string to send in the request body
+            string fileBase64 = Convert.ToBase64String(fileBytes);
+
+            // Prepare the request content
+            var requestContent = new StringContent($"{{\"fileBase64\": \"{fileBase64}\"}}", Encoding.UTF8, "application/json");
+
+            // Make the API call
+            HttpResponseMessage response = await client.PostAsync(apiEndpoint, requestContent);
+
+            // Ensure success status code
+            response.EnsureSuccessStatusCode();
+
+            // Read the response content
+            string apiResponse = await response.Content.ReadAsStringAsync();
+
+            // Process the API response
+            Console.WriteLine($"API Response: {apiResponse}");
+
+            // If API response contains any status, add them to the status list
+            // Here you would parse the response to extract status information
+            // For demonstration purposes, let's assume the response contains comma-separated status values
+            // Splitting by comma and trimming any whitespace
+            statusList.AddRange(apiResponse.Split(',').Select(status => status.Trim()));
+        }
+    }
+
+    static async Task GetStatus(string status)
+    {
+        // Simulate getting status for the provided status asynchronously
+        await Task.Delay(100); // Placeholder delay
+        
+        // Print the status
+        Console.WriteLine($"Status: {status}");
+    }
+}
