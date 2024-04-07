@@ -1,0 +1,97 @@
+npx playwright test -- all test run
+npx install -D allure-commandline
+npx allure generate ./allure-results --clean
+npx allure open ./allure-report
+
+------------------------------Playwright--------------------------------------------------
+
+import { test, expect } from '@playwright/test';
+import { baseUrl, positiveTestCases, negativeTestCases } from './loginBase.spec';
+
+positiveTestCases.forEach(positiveTest => {
+  test(positiveTest.loginMethod.NormalLogin+' Positive-Test: ' +positiveTest.name, async ({ page }) => {
+    await page.goto(baseUrl);
+    await page.getByRole('img').nth(2).click();
+    await page.getByPlaceholder('Username').fill(positiveTest.name);
+    await page.getByPlaceholder('Password').fill(positiveTest.password);
+    await page.getByRole('button', { name: 'Login' }).press('Enter');
+    await page.getByRole('button', { name: 'OK' }).press('Enter');
+    await page.waitForTimeout(5000);
+    const currentURL = page.url();
+    await expect(currentURL).toEqual(expect.stringContaining(positiveTest.expectedURL));
+  });
+});
+
+negativeTestCases.forEach(negativeTest => {
+  test(negativeTest.loginMethod.NormalLogin+' Negative-Test: ' +negativeTest.name, async ({ page }) => {
+    await page.goto(baseUrl);
+    await page.getByRole('img').nth(2).click();
+    await page.getByPlaceholder('Username').fill(negativeTest.name);
+    await page.getByPlaceholder('Password').fill(negativeTest.password);
+    await page.getByRole('button', { name: 'Login' }).press('Enter');
+    await expect(page.locator('#toast-container')).toContainText(negativeTest.expectedMessage);
+  });
+});
+
+positiveTestCases.forEach(positiveTest => {
+  test(positiveTest.loginMethod.SSOLogin+' Positive-Test: ' +positiveTest.name, async ({ page }) => {
+    await page.goto(baseUrl);
+    await page.getByRole('img').nth(2).click();
+    await page.getByPlaceholder('Username').fill(positiveTest.name);
+    await page.getByPlaceholder('Password').fill(positiveTest.password);
+    await page.getByRole('button', { name: 'Login' }).press('Enter');
+    await page.getByRole('button', { name: 'OK' }).press('Enter');
+    await page.waitForTimeout(5000);
+    const currentURL = page.url();
+    await expect(currentURL).toEqual(expect.stringContaining(positiveTest.expectedURL));
+  });
+});
+
+-----------------------------------------------------------Basefile-----------------------------------------------
+export const baseUrl = '';
+
+export const positiveTestCases = [
+    {
+      name: 'test_User1',
+      password: 'test_User1',
+      loginMethod: {
+        SSOLogin:'SSO Login',
+        NormalLogin: 'Normal Login',
+        ManualLogin: 'Manual Login',
+        SamlRequestLogin: 'Saml Request Login',
+      },
+      email:'er.bibeksah@gmail.com',
+      expectedURL: `${baseUrl}DashBoard`,
+      expectedMessage: null
+    }   
+  ];
+
+
+export const negativeTestCases = [
+    {
+      name: 'test_User1',
+      password: 'test1',
+      loginMethod: {
+        SSOLogin:'SSO Login',
+        NormalLogin: 'Normal Login',
+        ManualLogin: 'Manual Login',
+        SamlRequestLogin: 'Saml Request Login',
+      },
+      expectedURL: `${baseUrl}DashBoard`,
+      expectedMessage: 'Invalid username or password'
+    },
+    {
+      name: 'test_User2',
+      password: 'test2',
+      loginMethod: {
+        SSOLogin:'SSO Login',
+        NormalLogin: 'Normal Login',
+        ManualLogin: 'Manual Login',
+        SamlRequestLogin: 'Saml Request Login',
+      },
+      expectedURL: `${baseUrl}DashBoard`,
+      expectedMessage: 'Invalid username or password'
+    }
+  ];
+
+
