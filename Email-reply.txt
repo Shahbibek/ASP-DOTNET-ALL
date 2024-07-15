@@ -1,0 +1,669 @@
+Email functionality -- with Gmail API
+using MailKit.Net.Imap;
+using MailKit;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Web;
+using System.Web.Mvc;
+using MailKit.Search;
+using MimeKit;
+using System.IO;
+using System.Web.Helpers;
+using Net.Pkcs11Interop.Common;
+using MailKit.Net.Smtp;
+using System.Threading.Tasks;
+using System.Web.Services.Description;
+using System.Text;
+using System.Security.Cryptography;
+
+namespace EmailTestingWebAPP.Controllers
+{
+    public class HomeController : Controller
+    {
+        public async Task<ActionResult> Index()
+        {
+            var client = new ImapClient();
+            client.ServerCertificateValidationCallback = (s, c, h, e) => true;
+
+            // Connect to the IMAP server
+            await client.ConnectAsync("imap.gmail.com", 993, true);
+
+            // Authenticate with the server
+            await client.AuthenticateAsync("bkumarsah627@rku.ac.in", "Bibek@@9862967315##");
+
+            // Select the inbox folder
+            var inbox = client.Inbox;
+            await inbox.OpenAsync(FolderAccess.ReadOnly);
+            string subjecttosearch = "ITS 11 PM";
+
+            //var query = SearchQuery.SubjectContains(subjecttosearch);
+            var query = SearchQuery.SubjectContains(subjecttosearch);
+            var uids = await inbox.SearchAsync(query);
+            // Initialize a StringBuilder to store the entire thread history
+            var allMessages = new List<MimeMessage>();
+            var originalMsg = new MimeMessage();
+            originalMsg = await inbox.GetMessageAsync(uids[0]);
+
+            foreach (var uid in uids)
+            {
+                var message = await inbox.GetMessageAsync(uid);
+                var threadId = message.MessageId;
+
+                // Get the thread messages based on the message ID (threading is not directly supported by IMAP, so this is a workaround)
+                var threadQuery = SearchQuery.HeaderContains("References", threadId)
+                    .Or(SearchQuery.HeaderContains("In-Reply-To", threadId))
+                    .Or(SearchQuery.HeaderContains("Message-ID", threadId));
+                var threadUids = await inbox.SearchAsync(threadQuery);
+
+                foreach (var threadUid in threadUids)
+                {
+                    var threadMessage = await inbox.GetMessageAsync(threadUid);
+                    allMessages.Add(threadMessage);
+                }
+            }
+
+            // Sort messages by date
+            allMessages = allMessages.OrderBy(m => m.Date).ToList();
+            await client.DisconnectAsync(true);
+
+            string historyMessage = ReplyHtmlFormatter(allMessages);
+            var replyMessage = Reply(originalMsg, new MailboxAddress("Bibek", "bkumarsah627@rku.ac.in"), replyToAll: false, "", historyMessage);
+            using (var smtpClient = new SmtpClient())
+            {
+                smtpClient.ServerCertificateValidationCallback = (s, c, h, e) => true;
+                smtpClient.Connect("smtp.gmail.com", 465, true);
+                smtpClient.Authenticate("bkumarsah627@rku.ac.in", "Bibek@@9862967315##");
+                smtpClient.Send(replyMessage);
+                //smtpClient.Send(forwardMessage);
+                smtpClient.Disconnect(true);
+            }
+
+
+            return View();
+        }
+
+        public ActionResult About()
+        {
+            ViewBag.Message = "Your application description page.";
+
+            return View();
+        }
+
+        public ActionResult Contact()
+        {
+            ViewBag.Message = "Your contact page.";
+
+            return View();
+        }
+
+        public static MimeMessage Reply(MimeMessage message, MailboxAddress from, bool replyToAll, string customMessage, string htmlFormatter)
+        {
+            var reply = new MimeMessage();
+
+            reply.From.Add(from);
+
+            // reply to the sender of the message
+            if (message.ReplyTo.Count > 0)
+            {
+                reply.To.AddRange(message.ReplyTo);
+            }
+            else if (message.From.Count > 0)
+            {
+                reply.To.AddRange(message.From);
+            }
+            else if (message.Sender != null)
+            {
+                reply.To.Add(message.Sender);
+            }
+
+            if (replyToAll)
+            {
+                // include all of the other original recipients - TODO: remove ourselves from these lists
+                reply.To.AddRange(message.To.Mailboxes.Where(m => m.Address != from.Address));
+                reply.Cc.AddRange(message.Cc.Mailboxes.Where(m => m.Address != from.Address));
+            }
+
+            // set the reply subject
+            if (!message.Subject.StartsWith("Re:", StringComparison.OrdinalIgnoreCase))
+                reply.Subject = "Re: " + message.Subject;
+            else
+                reply.Subject = message.Subject;
+
+            // construct the In-Reply-To and References headers
+            if (!string.IsNullOrEmpty(message.MessageId))
+            {
+                // Add the headers
+                reply.References.Add(message.MessageId);
+                reply.InReplyTo = message.MessageId;
+                reply.Date = DateTime.UtcNow;
+            }
+
+            // quote the original message text
+            //using (var quoted = new StringWriter())
+            //{
+            //    var sender = message.Sender ?? message.From.Mailboxes.FirstOrDefault();
+
+            //    quoted.WriteLine("On {0}, {1} wrote:", message.Date.ToString("f"), !string.IsNullOrEmpty(sender.Name) ? sender.Name : sender.Address);
+            //    using (var reader = new StringReader(message.TextBody))
+            //    {
+            //        string line;
+
+            //        while ((line = reader.ReadLine()) != null)
+            //        {
+            //            quoted.Write(" ");
+            //            quoted.WriteLine(line);
+            //        }
+            //    }
+
+            // custom message
+            var bodyBuilder = new BodyBuilder();
+            bodyBuilder.HtmlBody = htmlFormatter;
+
+            customMessage = $"Dear {message.From},<br><br>Thank you for your email. Here is my reply.<br><br>This is an automatic system-generated reply so please do not reply to this email.<br><br>";
+            bodyBuilder.HtmlBody = customMessage + bodyBuilder.HtmlBody;
+
+            reply.Body = bodyBuilder.ToMessageBody();
+
+            //customMessage = $"Dear {message.From},\n\n Thank you for your email. Here is my reply.\n\n This is automatic system generated reply so, donot reply on this.";
+            //var replyText = $"{customMessage}\n\n{htmlFormatter}";
+
+            //reply.Body = new TextPart("plain")
+            //{
+            //    Text = replyText
+            //};
+
+            // Set the body of the reply message
+            //reply.Body = body;
+
+            return reply;
+        }
+        public static async Task<IList<MimeMessage>> FetchRelatedMessages(ImapClient client, IMailFolder folder, MimeMessage message)
+        {
+            var query = SearchQuery.HeaderContains("References", message.MessageId).Or(SearchQuery.HeaderContains("In-Reply-To", message.MessageId));
+            var uids = await folder.SearchAsync(query);
+
+            var relatedMessages = new List<MimeMessage>();
+            foreach (var uid in uids)
+            {
+                var relatedMessage = await folder.GetMessageAsync(uid);
+                relatedMessages.Add(relatedMessage);
+            }
+
+            return relatedMessages;
+        }
+
+        public static MimeMessage Forward(MimeMessage original, MailboxAddress from, IEnumerable<InternetAddress> to)
+        {
+            var message = new MimeMessage();
+            message.From.Add(from);
+            message.To.AddRange(to);
+
+            // set the forwarded subject
+            if ((bool)!original.Subject?.StartsWith("FW:", StringComparison.OrdinalIgnoreCase))
+                message.Subject = "FW: " + (original.Subject ?? string.Empty);
+            else
+                message.Subject = original.Subject;
+
+            // create the main textual body of the message
+            var text = new TextPart("plain") { Text = "Here's the forwarded message:" };
+
+            // create the message/rfc822 attachment for the original message
+            var rfc822 = new MimeKit.MessagePart { Message = original };
+
+            // create a multipart/mixed container for the text body and the forwarded message
+            var multipart = new Multipart("mixed");
+            multipart.Add(text);
+            multipart.Add(rfc822);
+
+            // set the multipart as the body of the message
+            message.Body = multipart;
+
+            return message;
+        }
+
+        public string ReplyHtmlFormatter(IList<MimeMessage> allMessages)
+        {
+            // HTML format for the email thread
+            var htmlBody = new StringBuilder();
+            htmlBody.AppendLine("<html><body>");
+            for (int i = 0; i < allMessages.Count; i++)
+            {
+                var message = allMessages[i];
+
+                // Determine if it's the original message or a reply
+                bool isOriginal = i == 0;
+                bool isReply = !isOriginal;
+
+                // Start the message container with appropriate styling
+                htmlBody.AppendLine("<div style='margin: 10px 0; padding: 10px; background-color: #f5f5f5; border: 1px solid #ddd;'>");
+
+                // Display sender and subject
+                htmlBody.AppendLine("<div style='font-weight: bold;'>");
+                htmlBody.AppendLine($"<span>{message.From}</span> ");
+                htmlBody.AppendLine($"- <span>{message.Subject}</span>");
+                htmlBody.AppendLine("</div>");
+
+                // Display date
+                htmlBody.AppendLine($"<div style='font-size: 0.9em; color: #888;'>{message.Date}</div>");
+
+                // Display message body
+                htmlBody.AppendLine("<div style='margin-top: 5px;'>");
+                htmlBody.AppendLine($"{(isOriginal ? "<p>" : "<blockquote>")}{message.HtmlBody ?? message.TextBody}{(isOriginal ? "</p>" : "</blockquote>")}");
+                htmlBody.AppendLine("</div>");
+
+                htmlBody.AppendLine("</div>");
+            }
+
+            htmlBody.AppendLine("</body></html>");
+
+            return htmlBody.ToString();
+        }
+
+        public static async Task SendFormattedReply(string htmlBody)
+        {
+            var message = new MimeMessage();
+            message.From.Add(new MailboxAddress("Your Name", "your-email@gmail.com"));
+            message.To.Add(new MailboxAddress("Recipient Name", "recipient-email@gmail.com"));
+            message.Subject = "Re: checking email";
+
+            var bodyBuilder = new BodyBuilder();
+            bodyBuilder.HtmlBody = htmlBody;
+            message.Body = bodyBuilder.ToMessageBody();
+
+            using (var client = new SmtpClient())
+            {
+                client.ServerCertificateValidationCallback = (s, c, h, e) => true;
+                await client.ConnectAsync("smtp.gmail.com", 587, false);
+                await client.AuthenticateAsync("your-email@gmail.com", "your-password");
+                await client.SendAsync(message);
+                await client.DisconnectAsync(true);
+            }
+        }
+    }
+}
+
+With Node JS
+const express = require('express');
+const nodemailer = require('nodemailer');
+const fs = require('fs');
+const path = require('path');
+const { google } = require('googleapis');
+// const HTML_TEMPLATE = require('./mail-template.js');
+// const SENDMAIL = require('./mailer.js');
+const bodyParser = require('body-parser');
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+// const originalMessageId = '<e763c54e-f7eb-ead4-12e2-9019fb2f1382@rku.ac.in>';
+// const transporter = nodemailer.createTransport({
+//     service: 'Gmail', // you can use other services like Yahoo, Outlook, etc.
+//     auth: {
+//         user: "bkumarsah627@rku.ac.in",
+//         pass: "Bibek@@9862967315##",
+//     }
+// });
+
+// const sendOptions = {
+//     from: 'bkumarsah627@rku.ac.in',
+//     to: 'rajbibek81@gmail.com', 
+//     subject: 'Hello',                
+//     text: 'Hello world?',              
+//     html: '<b>Hello world?</b>'
+// };
+
+// const replyOptions = {
+//     from: 'bkumarsah627@rku.ac.in',
+//     to: 'rajbibek81@gmail.com',
+//     subject: 'Re: Hello',             
+//     text: 'Hello again!',                
+//     html: '<b>Hello again!</b>',         
+//     'In-Reply-To': originalMessageId,    
+//     references: originalMessageId
+// };
+
+
+// app.get('/SendMail', (req, res) => {
+//     res.send('Hello from my API!');
+//     // Send mail with defined transport object
+//     transporter.sendMail(sendOptions, (error, info) => {
+//         if (error) {
+//             return console.log(error);
+//         }
+//         console.log('Message sent: %s', info.messageId);
+//         console.log('Preview URL: %s', nodemailer.getTestMessageUrl(info));
+//     });
+// });
+
+// app.get('/ReplyMail', (req, res) => {
+//     res.send('Hello from my API!');
+//     // Send mail with defined transport object
+//     transporter.sendMail(replyOptions, (error, info) => {
+//         if (error) {
+//             return console.log(error);
+//         }
+//         console.log('Message sent: %s', info.messageId);
+//         console.log('Preview URL: %s', nodemailer.getTestMessageUrl(info));
+//     });
+// });
+
+
+// Load client secrets from a local file.
+const CREDENTIALS_PATH = './credentials.json';
+const TOKEN_PATH = './token.json';
+
+// Scopes for the Gmail API
+const SCOPES = ['https://www.googleapis.com/auth/gmail.send',
+'https://www.googleapis.com/auth/gmail.readonly',
+'https://www.googleapis.com/auth/gmail.modify'
+];
+
+// Load client secrets from a local file.
+const credentials = JSON.parse(fs.readFileSync(CREDENTIALS_PATH));
+const { client_secret, client_id, redirect_uris } = credentials.web;
+const oAuth2Client = new google.auth.OAuth2(client_id, client_secret, redirect_uris[0]);
+
+app.use(bodyParser.urlencoded({ extended: true }));
+
+// Check if we have previously stored a token.
+if (fs.existsSync(TOKEN_PATH)) {
+  oAuth2Client.setCredentials(JSON.parse(fs.readFileSync(TOKEN_PATH)));
+} else {
+  getNewToken(oAuth2Client);
+}
+
+// Function to get a new token.
+async function getNewToken(oAuth2Client) {
+  const authUrl = oAuth2Client.generateAuthUrl({
+    access_type: 'offline',
+    scope: SCOPES,
+  });
+  console.log('Authorize this app by visiting this url:', authUrl);
+
+  // Dynamically import the 'open' module
+  const open = (await import('open')).default;
+  open(authUrl);
+}
+
+// Handle OAuth2 callback and store token.
+app.get('/oauth2callback', (req, res) => {
+  const code = req.query.code;
+  oAuth2Client.getToken(code, (err, token) => {
+    if (err) return res.status(400).send('Error retrieving access token');
+    oAuth2Client.setCredentials(token);
+    fs.writeFileSync(TOKEN_PATH, JSON.stringify(token));
+    res.send('Authentication successful! You can close this window.');
+  });
+});
+
+// List messages in the user's account filtered by subject.
+async function listMessages(auth, subject) {
+  const gmail = google.gmail({ version: 'v1', auth });
+  const res = await gmail.users.messages.list({
+    userId: 'me',
+    maxResults: 10,  // Adjust this value as needed
+    q: `subject:${subject}`,
+  });
+  return res.data.messages;
+}
+
+// Get the original email
+async function getOriginalEmail(auth, threadId) {
+  const gmail = google.gmail({ version: 'v1', auth });
+  const res = await gmail.users.threads.get({
+    userId: 'me',
+    id: threadId,
+    historyMessages: 50,
+  });
+
+  
+  console.log('Gmail API response:', res.data); // Log the full response
+
+  // if (!res.data.messages || res.data.messages.length === 0) {
+  //   throw new Error('No messages found.');
+  // }
+
+  // const messageId = res.data.messages[0].id;
+  // const message = await gmail.users.messages.get({
+  //   userId: 'me',
+  //   id: messageId,
+  // });
+
+  return res.data;
+}
+
+async function buildReferencesHeader(messages) {
+  let references = '';
+  messages.forEach(message => {
+    const messageId = message.payload.headers.find(header => header.name === 'Message-ID')?.value;
+    if (messageId) {
+      references += `${references ? ',' : ''}${messageId}`;
+    }
+  });
+  return references;
+}
+
+// Function to format email history
+function formatEmailHistory(messages) {
+  return messages.map(message => {
+    const headers = message.payload.headers;
+    const from = headers.find(header => header.name === 'From').value;
+    const date = headers.find(header => header.name === 'Date').value;
+    const subject = headers.find(header => header.name === 'Subject').value;
+    const body = message.payload.parts
+      ? message.payload.parts.filter(part => part.mimeType === 'text/plain')[0].body.data
+      : message.payload.body.data;
+    const decodedBody = Buffer.from(body, 'base64').toString('utf-8').replace(/-/g, '+').replace(/_/g, '/');
+    return `On ${date}, ${from} wrote:\n> ${decodedBody.split('\n').join('\n> ')}\n\n`;
+  }).reverse().join('');
+}
+
+// send reply with email thread history
+async function sendReplyWithHistory(auth, originalEmail, replyTO, threadId, subjectPrefix = 'Re: ') {
+  const gmail = google.gmail({ version: 'v1', auth });
+
+  // 1. Retrieve Thread Messages (Optional, for reference)
+  const threadMessages = await getOriginalEmail(auth, threadId);
+
+  const formattedThreadContent = threadMessages.messages ? threadMessages.messages.map(message => {
+    const sender = message.payload.headers.find(header => header.name === 'From').value;
+    const date = message.payload.headers.find(header => header.name === 'Date').value;
+    const snippet = message.snippet.replace(/\r?\n|\r/g, ' ');
+
+    return `**From:** ${sender} **on:** ${date}\n${snippet}\n`;
+  }).join('\n\n') : '';
+
+  let referencesHeader = '';
+  if (threadMessages) {
+    referencesHeader = await buildReferencesHeader(threadMessages.messages);
+  }
+
+  const emailContent = [
+    `To: ${replyTO}`,
+    `Subject: ${subjectPrefix}${originalEmail.messages[0].payload.headers.find(header => header.name === 'Subject').value}`,
+    ...(referencesHeader ? [`In-Reply-To: ${originalEmail.messages[0].id}`] : []),
+    ...(referencesHeader ? [`References: ${referencesHeader}`] : []),
+    ``,
+    `This is a reply with history to your email.`,
+    ...(formattedThreadContent ? `\n---\n**Original Thread:**\n${formattedThreadContent}\n` : ''),
+    `\n\n${''}`,
+  ].join('\n');
+
+  const encodedMessage = Buffer.from(emailContent)
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+
+  // 4. Send Reply (as new thread or with references)
+  try {
+    if (referencesHeader) {
+      await gmail.users.messages.send({
+        userId: 'me',
+        requestBody: {
+          raw: encodedMessage,
+        },
+        headers: {
+          'References': referencesHeader,
+        },
+      });
+    } else {
+      await gmail.users.messages.send({
+        userId: 'me',
+        requestBody: {
+          raw: encodedMessage,
+        },
+      });
+    }
+    console.log('Email reply sent successfully!');
+  } catch (error) {
+    console.error('Error sending email reply:', error);
+  }
+}
+
+async function sendEmailReply(auth, originalEmail, replyTO) {
+  const gmail = google.gmail({ version: 'v1', auth });
+
+  // const originalMessageId = originalEmail.messages[0].payload.headers.find(
+  //   header => header.name === 'Message-ID'
+  // ).value;
+
+  const originalMessageId = originalEmail.messages.find(
+    message => message.payload.headers.find(header => header.name === 'Message-ID')
+  )?.payload.headers.find(header => header.name === 'Message-ID').value || originalEmail.id;
+
+  let references = originalMessageId;
+  originalEmail.messages.forEach(message => {
+    const messageId = message.payload.headers.find(header => header.name === 'Message-ID')?.value;
+    if (messageId && messageId !== originalMessageId) {
+      references += `,${messageId}`;
+    }
+  });
+
+  const referencesHeader = await buildReferencesHeader(originalEmail.messages);
+
+  const emailHistory = formatEmailHistory(originalEmail.messages);
+
+  const emailContent = [
+    `To: ${replyTO}`,
+    `Subject: Re: ${originalEmail.messages[0].payload.headers.find(header => header.name === 'Subject').value}`,
+    `In-Reply-To: ${originalMessageId}`,
+    `References: ${originalMessageId}`,
+    ``,
+    `This is a reply to your email.`,
+    `\n\n${''}`,
+  ].join('\n');
+
+  const encodedMessage = Buffer.from(emailContent)
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+
+  await gmail.users.messages.send({
+    userId: 'me',
+    requestBody: {
+      raw: encodedMessage,
+      threadId: originalEmail.messages[0].threadId,
+      labelIds: originalEmail.messages[0].labelIds
+    },
+    headers: {
+      'References': referencesHeader,
+      'In-Reply-To': originalMessageId,
+    },
+  });
+}
+
+// Send email using Gmail API
+async function sendEmail(auth, originalMessageId) {
+    const gmail = google.gmail({ version: 'v1', auth });
+
+    const raw = createRawEmail('bkumarsah627@rku.ac.in', 'rajbibek81@gmail.com', 'Re: testing try', 'Hello again!', originalMessageId);
+
+    const res = await gmail.users.messages.send({
+        userId: 'me',
+        requestBody: {
+            raw,
+        },
+    });
+
+    console.log('Email sent:', res.data);
+}
+
+// Create a raw email
+function createRawEmail(from, to, subject, body, originalMessageId) {
+    const messageParts = [
+        `From: ${from}`,
+        `To: ${to}`,
+        `Subject: ${subject}`,
+        `In-Reply-To: ${originalMessageId}`,
+        `References: ${originalMessageId}`,
+        '',
+        body,
+    ];
+    const message = messageParts.join('\n');
+    const encodedMessage = Buffer.from(message)
+        .toString('base64')
+        .replace(/\+/g, '-')
+        .replace(/\//g, '_')
+        .replace(/=+$/, '');
+
+    return encodedMessage;
+}
+
+
+app.get('/SendMail', async (req, res) => {
+  try {
+    res.send('Hello from my API, Its me Bibek back again !!!');
+    const originalMessageId = '<CAEuB9KqwO3J2J+AezxeVCw2k6sVq44-t+0Xxw-Zqc2jU6oJdJg@mail.gmail.com>'; // Replace with the actual original message ID
+    await sendEmail(oAuth2Client, originalMessageId);
+  } catch (error) {
+    console.error('Error sending email:', error);
+    res.status(500).send('Error sending email');
+  }
+});
+
+app.get('/ReplyMail', async (req, res) => {
+  try {
+    res.send('Hello from my API, Its me Bibek back again !!!');
+    var subjectToFilter = 'Checking Email'; // Replace with the actual subject to filter
+    const messages = await listMessages(oAuth2Client, subjectToFilter);
+    if (messages && messages.length) {
+      const threadId = messages[0].threadId; // Use the threadId from the first message
+      console.log(`Using threadId: ${threadId}`);
+      var originalEmail = await getOriginalEmail(oAuth2Client, threadId);
+      await sendEmailReply(oAuth2Client, originalEmail, 'rajbibek81@gmail.com'); // Replace with the actual recipient email
+    } else {
+      console.log('No messages found with the specified subject.');
+    }
+  } catch (error) {
+    console.error('Error sending email:', error);
+    res.status(500).send('Error sending email');
+  }
+});
+
+app.get('/ReplyWithHistory', async (req, res) => {
+  try {
+    res.send('Hello from my API, Its me Bibek back again !!!');
+    var subjectToFilter = 'Checking Email'; // Replace with the actual subject to filter
+    const messages = await listMessages(oAuth2Client, subjectToFilter);
+    if (messages && messages.length) {
+      const threadId = messages[0].threadId; // Use the threadId from the first message
+      console.log(`Using threadId: ${threadId}`);
+      var originalEmail = await getOriginalEmail(oAuth2Client, threadId);
+      await sendReplyWithHistory(oAuth2Client, originalEmail, 'rajbibek81@gmail.com',threadId, 'Re: '); // Replace with the actual recipient email
+    } else {
+      console.log('No messages found with the specified subject.');
+    }
+  } catch (error) {
+    console.error('Error sending email:', error);
+    res.status(500).send('Error sending email');
+  }
+});
+
+
+
+
+app.listen(PORT, () => {
+    console.log(`Server listening on port ${PORT}`);
+});
